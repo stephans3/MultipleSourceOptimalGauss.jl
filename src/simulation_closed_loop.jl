@@ -123,13 +123,6 @@ p_oc = [
     5.8001824394982195]
 
  
-#dt_mpc = 20
-#=
-p_mpc=[
-    9.7847   7.71691  8.62945  8.04458  8.47171  8.64711  5.73158  8.59798  8.62338  7.11493
- 9.652    7.45342  7.36406  7.33047  7.65228  8.21016  5.70294  8.24737  8.15391  7.13823
- 9.78428  7.71814  8.63139  8.04023  8.47282  8.64792  5.73176  8.59671  8.62527  7.10802
-]=#
 
 p_mpc=[
     9.7847   7.71691  8.62945  8.04458  8.47171  8.64711  5.73158  8.59798  8.62338  7.11493  8.57444  7.77341  7.81869  8.79168  7.88855  8.28936  7.741    6.23763  8.83499  7.37992
@@ -162,24 +155,10 @@ sol_mpc = solve(prob_mpc,alg,p=exp.(p_mpc), saveat=t_samp)
 
 nt_oc = length(sol_oc.t);
 nt_mpc = length(sol_mpc.t);
-tgrid_total = vcat(sol_oc.t, sol_mpc.t[2:end])
-num_tsteps = length(tgrid_total)
+tgrid = vcat(sol_oc.t, sol_mpc.t[2:end])
+num_tsteps = length(tgrid)
 
-temp_data_complete = zeros(num_tsteps, Ntotal)
 
-hcat(sol_oc.u[:,:]...)'
-
-temp_data_complete[1:nt_oc,:] = copy(hcat(sol_oc.u[:]...)')
-temp_data_complete[nt_oc+1:end,:] = copy(hcat(sol_mpc.u[2:end]...)')
-
-temp_data_complete
-
-using CairoMakie
-
-fig = surface(temp_data_complete[:,(Ny-1)*Nx:Ny*Nx],
-    axis=(type=Axis3, azimuth = 5pi/4))
-
-fig
 
     # Temperature measurement 
 function measure_temperature(temperature_data, iosetup, index, pos_sensor)
@@ -221,16 +200,90 @@ end
 
 Δr = 200;
 ref_cos(t) = θ₀ + Δr*psi_smooth_step(t;T=Toc, tshift=150)
-ref_data = ref_cos.(tgrid_total)
+ref_data = ref_cos.(tgrid)
 
 error_data = zeros(num_tsteps, num_actuators)
 error_data[:,1] = ref_data - temp_data[:,1]
 error_data[:,2] = ref_data - temp_data[:,2]
 error_data[:,3] = ref_data - temp_data[:,3]
 
-t_ref = 0 : 50 : tgrid_total[end]
+t_ref = 0 : 50 : tgrid[end]
 
+
+
+xs = plate.sampling[1]
+xgrid = xs : xs : Nx*xs
+
+temp_data_complete = zeros(num_tsteps, Ntotal)
+temp_data_complete[1:nt_oc,:] = copy(hcat(sol_oc.u[:]...)')
+temp_data_complete[nt_oc+1:end,:] = copy(hcat(sol_mpc.u[2:end]...)')
+
+temp_data_complete
+temp_data_complete[:,(Ny-1)*Nx+1:Ny*Nx]
 using CairoMakie
+
+begin
+    fig = Figure(size=(800,600),fontsize=20)
+    ax = Axis3(fig[1,1], azimuth = 5pi/4, 
+                xlabel = "Time t in [s]", ylabel = "Position x in [m]", zlabel = "Temperature in [K]", 
+                xlabelsize = 24, ylabelsize = 24, zlabelsize = 24,)
+
+    surface!(ax, tgrid[1:20:end], xgrid, temp_data_complete[1:20:end,(Ny-1)*Nx+1:Ny*Nx], colormap = :plasma)            
+    fig
+    save("results/figures/"*"temp_north_3d.pdf", fig,pt_per_unit = 1)    
+end
+
+
+u_in_data = zeros(num_tsteps, num_actuators)
+
+u_in_data[1:nt_oc,1] = input_signal_oc.(tgrid[1:nt_oc]/Toc,p_oc[1:3]...)
+u_in_data[1:nt_oc,2] = input_signal_oc.(tgrid[1:nt_oc]/Toc,p_oc[4:6]...)
+u_in_data[1:nt_oc,3] = input_signal_oc.(tgrid[1:nt_oc]/Toc,p_oc[7:9]...)
+
+mpc_time = tgrid[nt_oc+1:end] .- T_offset
+blubb_mpc = mpc_signal.(mpc_time', dt_mpc, exp.(p_mpc[1,:]),0)
+
+mpc_signal.(mpc_time, dt_mpc, exp.(p_mpc[1,1]),0)
+u_in_data[nt_oc+1:end,1] = mapreduce(i->mpc_signal.(mpc_time, dt_mpc, exp.(p_mpc[1,i+1]),i),+,0:size(p_mpc)[2]-1)
+u_in_data[nt_oc+1:end,2] = mapreduce(i->mpc_signal.(mpc_time, dt_mpc, exp.(p_mpc[2,i+1]),i),+,0:size(p_mpc)[2]-1)
+u_in_data[nt_oc+1:end,3] = mapreduce(i->mpc_signal.(mpc_time, dt_mpc, exp.(p_mpc[3,i+1]),i),+,0:size(p_mpc)[2]-1)
+
+
+
+begin
+    fig1 = Figure(size=(800,600),fontsize=20)
+    ax1 = Axis(fig1[1, 1], xlabel = "Time t in [s]", ylabel = "Input Signal", ylabelsize = 24,
+        xlabelsize = 24, xgridstyle = :dash, ygridstyle = :dash, 
+        xtickalign = 1., xticksize = 10, 
+        xminorgridvisible = true, xminorticksvisible = true, xminortickalign = 1,
+        yminorgridvisible = true, yminorticksvisible = true, yminortickalign = 1,
+        ytickalign = 1, yticksize = 10, xlabelpadding = 0)
+    
+    ax1.xticks = 0 : 100 : tgrid[end];    
+    #ax1.yticks = -5 : 0.5 : 3;
+    lines!(tgrid, u_in_data[:,1]; linestyle = :dot,     linewidth = 4, label = L"Input 1$")
+    lines!(tgrid, u_in_data[:,2]; linestyle = :dash,    linewidth = 4, label = L"Input 2$")
+    lines!(tgrid, u_in_data[:,3]; linestyle = :dashdot, linewidth = 4, label = L"Input 3$")
+    axislegend(; position = :lt, backgroundcolor = (:grey90, 0.1));
+
+    t0_ax2 = 600;
+    x_off = 0;
+    y_off = 0;
+
+    ax2 = Axis(fig1, bbox=BBox(425, 753, 317, 538), ylabelsize = 24, title=L"$\times 10^3$                                       ")
+    #ax2 = Axis(fig1, bbox=BBox(435, 750, 231, 437), ylabelsize = 24, title=L"$\times 10^3$                                       ")
+    #ax2.xticks =  t0_ax2: 50 : Tf;
+    #ax2.yticks = 496 : 2 : 504;
+    lines!(ax2, tgrid[t0_ax2:end],u_in_data[t0_ax2:end,1] / 1e3; linestyle = :dot,     linewidth = 3, color=Makie.wong_colors()[1])
+    lines!(ax2, tgrid[t0_ax2:end],u_in_data[t0_ax2:end,2] / 1e3; linestyle = :dash,    linewidth = 3, color=Makie.wong_colors()[2])
+    lines!(ax2, tgrid[t0_ax2:end],u_in_data[t0_ax2:end,3] / 1e3; linestyle = :dashdot, linewidth = 3, color=Makie.wong_colors()[3])
+    translate!(ax2.scene, 0, 0, 0);
+
+    fig1
+    save("results/figures/"*"input_signal.pdf", fig1, pt_per_unit = 1)    
+  end
+
+
 begin
     fig1 = Figure(size=(800,600),fontsize=20)
     ax1 = Axis(fig1[1, 1], xlabel = "Time t in [s]", ylabel = "Temperature in [K]", ylabelsize = 24,
@@ -242,9 +295,9 @@ begin
     
     ax1.xticks = 0 : 100 : Tf;    
     ax1.yticks = θ₀ : 20 : θ₀+Δr;
-    lines!(tgrid_total, temp_data[:,1]; linestyle = :dot,     linewidth = 4, label = "Sensor 1")
-    lines!(tgrid_total, temp_data[:,2]; linestyle = :dash,    linewidth = 4, label = "Sensor 2")
-    lines!(tgrid_total, temp_data[:,3]; linestyle = :dashdot, linewidth = 4, label = "Sensor 3")
+    lines!(tgrid, temp_data[:,1]; linestyle = :dot,     linewidth = 4, label = "Sensor 1")
+    lines!(tgrid, temp_data[:,2]; linestyle = :dash,    linewidth = 4, label = "Sensor 2")
+    lines!(tgrid, temp_data[:,3]; linestyle = :dashdot, linewidth = 4, label = "Sensor 3")
     scatter!(t_ref, ref_data[1:50:end]; markersize = 15, marker = :diamond, color=:black, label = "Reference")
     axislegend(; position = :lt, backgroundcolor = (:grey90, 0.1));
   
@@ -256,10 +309,10 @@ begin
     ax2 = Axis(fig1, bbox=BBox(435, 750, 231, 437), ylabelsize = 24)
     #ax2.xticks =  t0_ax2: 50 : Tf;
     #ax2.yticks = 496 : 2 : 504;
-    lines!(ax2, tgrid_total[t0_ax2:end],temp_data[t0_ax2:end,1]; linestyle = :dot,     linewidth = 5, color=Makie.wong_colors()[1])
-    lines!(ax2, tgrid_total[t0_ax2:end],temp_data[t0_ax2:end,2]; linestyle = :dash,    linewidth = 5, color=Makie.wong_colors()[2])
-    lines!(ax2, tgrid_total[t0_ax2:end],temp_data[t0_ax2:end,3]; linestyle = :dashdot, linewidth = 5, color=Makie.wong_colors()[3])
-    scatter!(ax2, tgrid_total[t0_ax2:50:end], ref_data[t0_ax2:50:end]; markersize = 15, marker = :diamond, color=:black)
+    lines!(ax2, tgrid[t0_ax2:end],temp_data[t0_ax2:end,1]; linestyle = :dot,     linewidth = 5, color=Makie.wong_colors()[1])
+    lines!(ax2, tgrid[t0_ax2:end],temp_data[t0_ax2:end,2]; linestyle = :dash,    linewidth = 5, color=Makie.wong_colors()[2])
+    lines!(ax2, tgrid[t0_ax2:end],temp_data[t0_ax2:end,3]; linestyle = :dashdot, linewidth = 5, color=Makie.wong_colors()[3])
+    scatter!(ax2, tgrid[t0_ax2:50:end], ref_data[t0_ax2:50:end]; markersize = 15, marker = :diamond, color=:black)
     translate!(ax2.scene, 0, 0, 0);
     fig1
     save("results/figures/"*"he_ref_tracking.pdf", fig1, pt_per_unit = 1)    
@@ -277,11 +330,11 @@ begin
         yminorgridvisible = true, yminorticksvisible = true, yminortickalign = 1,
         ytickalign = 1, yticksize = 10, xlabelpadding = 0)
     
-    ax1.xticks = 0 : 100 : tgrid_total[end];    
+    ax1.xticks = 0 : 100 : tgrid[end];    
     ax1.yticks = -5 : 0.5 : 3;
-    lines!(tgrid_total, error_data[:,1]; linestyle = :dot,     linewidth = 4, label = L"Error $e_{1}$")
-    lines!(tgrid_total, error_data[:,2]; linestyle = :dash,    linewidth = 4, label = L"Error $e_{2}$")
-    lines!(tgrid_total, error_data[:,3]; linestyle = :dashdot, linewidth = 4, label = L"Error $e_{3}$")
+    lines!(tgrid, error_data[:,1]; linestyle = :dot,     linewidth = 4, label = L"Error $e_{1}$")
+    lines!(tgrid, error_data[:,2]; linestyle = :dash,    linewidth = 4, label = L"Error $e_{2}$")
+    lines!(tgrid, error_data[:,3]; linestyle = :dashdot, linewidth = 4, label = L"Error $e_{3}$")
     axislegend(; position = :lt, backgroundcolor = (:grey90, 0.1));
     fig1
     save("results/figures/"*"error_trajectory_cos_ref.pdf", fig1, pt_per_unit = 1)    
